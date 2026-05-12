@@ -1,0 +1,353 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Description: >
+  AI Invoice Analysis System — SAM template.
+  Deploys: API Lambda (FastAPI + Mangum), Processing Lambda (SQS-triggered),
+  S3 bucket, SQS queue, DynamoDB table, and all IAM roles with least privilege.
+
+# ---------------------------------------------------------------------------
+# Global defaults for all Lambda functions
+# ---------------------------------------------------------------------------
+
+Globals:
+  Function:
+    Runtime: python3.12
+    MemorySize: 512
+    Timeout: 30
+    Environment:
+      Variables:
+        AWS_REGION: !Ref AWS::Region
+        DYNAMODB_TABLE_NAME: !Ref InvoicesTable
+        S3_BUCKET_NAME: !Ref InvoiceBucket
+    Layers:
+      - !Ref DependenciesLayer
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment name
+
+  PresignedUrlExpiry:
+    Type: Number
+    Default: 300
+    Description: Presigned URL expiry in seconds
+
+  MaxFileSizeBytes:
+    Type: Number
+    Default: 10485760
+    Description: Maximum allowed invoice file size in bytes (default 10 MB)
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+
+Resources:
+
+  # -----------------------------------------------------------------------
+  # Shared Lambda Layer — Python dependencies
+  # -----------------------------------------------------------------------
+
+  DependenciesLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub "ai-invoice-deps-${Environment}"
+      Description: "Python dependencies for AI Invoice Lambdas"
+      ContentUri: dependencies/
+      CompatibleRuntimes:
+        - python3.12
+      RetentionPolicy: Delete
+    Metadata:
+      BuildMethod: python3.12
+
+  # -----------------------------------------------------------------------
+  # S3 — Invoice storage bucket
+  # -----------------------------------------------------------------------
+
+  InvoiceBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "ai-invoice-uploads-${Environment}-${AWS::AccountId}"
+      # Block all public access
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      # Enforce HTTPS only
+      VersioningConfiguration:
+        Status: Enabled
+      # Notify SQS on object creation
+      NotificationConfiguration:
+        QueueConfigurations:
+          - Event: "s3:ObjectCreated:*"
+            Queue: !GetAtt InvoiceQueue.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: uploads/
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+
+  InvoiceBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref InvoiceBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyHTTP
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !Sub "arn:aws:s3:::${InvoiceBucket}"
+              - !Sub "arn:aws:s3:::${InvoiceBucket}/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": false
+
+  # -----------------------------------------------------------------------
+  # SQS — Invoice processing queue
+  # -----------------------------------------------------------------------
+
+  InvoiceQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "ai-invoice-queue-${Environment}"
+      VisibilityTimeout: 180   # >= 6x Lambda timeout
+      MessageRetentionPeriod: 86400
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt InvoiceDeadLetterQueue.Arn
+        maxReceiveCount: 3
+
+  InvoiceDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "ai-invoice-dlq-${Environment}"
+      MessageRetentionPeriod: 1209600   # 14 days
+
+  InvoiceQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref InvoiceQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowS3SendMessage
+            Effect: Allow
+            Principal:
+              Service: s3.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt InvoiceQueue.Arn
+            Condition:
+              ArnLike:
+                "aws:SourceArn": !Sub "arn:aws:s3:::ai-invoice-uploads-${Environment}-${AWS::AccountId}"
+
+  # -----------------------------------------------------------------------
+  # DynamoDB — Invoice records table
+  # -----------------------------------------------------------------------
+
+  InvoicesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "InvoicesTable-${Environment}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: invoice_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: invoice_id
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+
+  # -----------------------------------------------------------------------
+  # API Lambda — FastAPI + Mangum
+  # -----------------------------------------------------------------------
+
+  ApiLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "ai-invoice-api-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ApiLambdaPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # S3 — presigned URL generation only
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource: !Sub "arn:aws:s3:::${InvoiceBucket}/uploads/*"
+              # DynamoDB — read only
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:Scan
+                Resource: !GetAtt InvoicesTable.Arn
+
+  ApiLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "ai-invoice-api-${Environment}"
+      CodeUri: api_lambda/
+      Handler: main.handler
+      Role: !GetAtt ApiLambdaRole.Arn
+      Environment:
+        Variables:
+          PRESIGNED_URL_EXPIRY: !Ref PresignedUrlExpiry
+          MAX_FILE_SIZE_BYTES: !Ref MaxFileSizeBytes
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref InvoiceApi
+            Path: /{proxy+}
+            Method: ANY
+        RootEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref InvoiceApi
+            Path: /
+            Method: ANY
+
+  # -----------------------------------------------------------------------
+  # API Gateway
+  # -----------------------------------------------------------------------
+
+  InvoiceApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub "ai-invoice-api-gateway-${Environment}"
+      StageName: !Ref Environment
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
+        AllowOrigin: "'*'"
+
+  # -----------------------------------------------------------------------
+  # Processing Lambda — SQS-triggered
+  # -----------------------------------------------------------------------
+
+  ProcessingLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "ai-invoice-processing-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole
+      Policies:
+        - PolicyName: ProcessingLambdaPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # S3 — read invoice files for Textract
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub "arn:aws:s3:::${InvoiceBucket}/uploads/*"
+              # Textract — analyse documents
+              - Effect: Allow
+                Action:
+                  - textract:AnalyzeDocument
+                Resource: "*"
+              # DynamoDB — write processed invoices
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !GetAtt InvoicesTable.Arn
+              # SQS — consume + delete messages
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt InvoiceQueue.Arn
+
+  ProcessingLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "ai-invoice-processing-${Environment}"
+      CodeUri: processing_lambda/
+      Handler: handler.lambda_handler
+      Role: !GetAtt ProcessingLambdaRole.Arn
+      Timeout: 120
+      MemorySize: 1024
+      ReservedConcurrentExecutions: 10
+      Events:
+        SQSTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt InvoiceQueue.Arn
+            BatchSize: 5
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+
+Outputs:
+  ApiEndpoint:
+    Description: "API Gateway endpoint URL"
+    Value: !Sub "https://${InvoiceApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
+
+  InvoiceBucketName:
+    Description: "S3 bucket for invoice uploads"
+    Value: !Ref InvoiceBucket
+
+  InvoicesTableName:
+    Description: "DynamoDB table for processed invoices"
+    Value: !Ref InvoicesTable
+
+  InvoiceQueueUrl:
+    Description: "SQS queue URL"
+    Value: !Ref InvoiceQueue
+
+  InvoiceDeadLetterQueueUrl:
+    Description: "SQS dead letter queue URL"
+    Value: !Ref InvoiceDeadLetterQueue
+
+  ApiLambdaArn:
+    Description: "API Lambda ARN"
+    Value: !GetAtt ApiLambdaFunction.Arn
+
+  ProcessingLambdaArn:
+    Description: "Processing Lambda ARN"
+    Value: !GetAtt ProcessingLambdaFunction.Arn
