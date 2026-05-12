@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { cn, formatFileSize, SUPPORTED_EXTENSIONS } from '../../utils';
+import { cn, SUPPORTED_EXTENSIONS } from '../../utils';
 
 /**
  * Drag-and-drop upload card with file picker fallback.
