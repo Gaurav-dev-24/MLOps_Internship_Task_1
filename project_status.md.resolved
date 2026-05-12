@@ -1,0 +1,112 @@
+# AI Invoice Analysis System — Project Status
+
+> **As of:** 2026-05-12 · **Stack:** React + FastAPI + AWS Serverless (SAM)
+
+---
+
+## ✅ What Is Complete
+
+### Backend — `api_lambda/`
+| File / Layer | Status | Notes |
+|---|---|---|
+| `main.py` | ✅ Done | FastAPI app + `handler = Mangum(app)` wired correctly |
+| `routes/invoice_routes.py` | ✅ Done | All 3 endpoints: `POST /generate-upload-url`, `GET /invoice/{id}`, `GET /invoices` |
+| `services/invoice_service.py` | ✅ Done | Business logic layer present |
+| `services/s3_service.py` | ✅ Done | Presigned URL generation |
+| `repositories/invoice_repository.py` | ✅ Done | DynamoDB read abstraction |
+| `schemas/invoice_schema.py` | ✅ Done | Pydantic request validation (file type + size) |
+| `utils/response_formatter.py` | ✅ Done | Standardised `{success, message, data}` envelope |
+| `utils/logger.py` | ✅ Done | CloudWatch-ready logging (no `print()`) |
+| `exceptions/custom_exceptions.py` | ✅ Done | `S3UploadException`, `DynamoDBException`, `InvoiceNotFoundException` |
+| `config/settings.py` | ✅ Done | Environment variable management |
+
+### Backend — `processing_lambda/`
+| File / Layer | Status | Notes |
+|---|---|---|
+| `handler.py` | ✅ Done | SQS-triggered `lambda_handler`, batch processing, DLQ support |
+| `services/textract_service.py` | ✅ Done | `analyze_document()` with `TABLES` + `FORMS` |
+| `services/dynamodb_service.py` | ✅ Done | `save_invoice()` via `table.put_item()` |
+| `services/summary_service.py` | ✅ Done | Separate `generate_summary()` step |
+| `services/queue_service.py` | ✅ Done | Present |
+| `parsers/invoice_parser.py` | ✅ Done | Textract JSON → structured dict (18 KB — the hardest part) |
+| `exceptions/custom_exceptions.py` | ✅ Done | `TextractProcessingException`, `InvoiceParsingException`, `DynamoDBException` |
+| `utils/logger.py` | ✅ Done | Logging present |
+
+### Infrastructure — `backend/`
+| File | Status | Notes |
+|---|---|---|
+| `template.yaml` | ✅ Done | Full SAM template — S3, SQS, DLQ, DynamoDB, API GW, 2× Lambdas, IAM least-privilege |
+| `samconfig.toml` | ✅ Done | Region `ap-south-1`, stack `ai-invoice-app-dev`, deploy params set |
+| `dependencies/requirements.txt` | ✅ Done | Lambda Layer dependency file present |
+
+### Frontend — `frontend/src/`
+| File / Layer | Status | Notes |
+|---|---|---|
+| `pages/Upload/Upload.jsx` | ✅ Done | Upload page |
+| `pages/Dashboard/Dashboard.jsx` | ✅ Done | Dashboard page |
+| `pages/History/History.jsx` | ✅ Done | History list page |
+| `pages/InvoiceDetails/InvoiceDetails.jsx` | ✅ Done | Detail view — SummaryCard, LineItemsTable, JsonViewer |
+| `components/invoice/` | ✅ Done | `InvoiceTable`, `JsonViewer`, `LineItemsTable`, `SummaryCard` |
+| `components/common/` | ✅ Done | `LoadingSpinner`, `ErrorState`, `EmptyState`, `StatusBadge` |
+| `services/invoiceService.js` | ✅ Done | API calls to backend |
+| `services/uploadService.js` | ✅ Done | S3 presigned PUT |
+| `api/apiClient.js` | ✅ Done | Axios client |
+
+---
+
+## ❌ What Is Missing / Not Yet Done
+
+### 1. GitHub Actions CI/CD Pipeline
+> **PRD requirement:** `GitHub Push → GitHub Actions → AWS SAM Build → SAM Deploy`
+
+No `.github/workflows/` directory exists. The deployment pipeline is **not set up**.
+
+### 2. AWS Deployment (not yet run)
+The SAM template and config are ready but the stack has not been deployed to AWS yet. You need to:
+- Run `sam build` inside `backend/`
+- Run `sam deploy` (or let CI do it)
+
+### 3. Frontend `.env` / API Base URL wiring
+The `.env` file at root exists (424 bytes) but the frontend `apiClient.js` needs to point to the real API Gateway endpoint output after deployment.
+
+### 4. README completion
+`backend/README.md` exists (5.9 KB) and `frontend/README.md` exists (1 KB). The root-level `README.md` is **missing** (PRD lists it as a required deliverable).
+
+---
+
+## 🔜 Next Step — GitHub Actions CI/CD Pipeline
+
+This is the only major PRD deliverable not yet implemented. Create:
+
+```
+.github/
+  workflows/
+    deploy.yml
+```
+
+The workflow should:
+1. **Trigger** on push to `main`
+2. **Configure AWS credentials** (`aws-actions/configure-aws-credentials`)
+3. **Run `sam build`** inside `backend/`
+4. **Run `sam deploy --no-confirm-changeset`** using `samconfig.toml`
+5. Optionally: **build & deploy the React frontend** to S3/CloudFront
+
+---
+
+## 📋 PRD Success Criteria Checklist
+
+| Criteria | Status |
+|---|---|
+| Invoice upload with file type + size validation | ✅ |
+| Textract extracts invoice data | ✅ |
+| Table, JSON, Summary display | ✅ |
+| CloudWatch logs — no `print()` | ✅ |
+| All boto3 calls wrapped in `try-except` with custom exceptions | ✅ |
+| Standardised `{success, message, data}` API envelope | ✅ |
+| `GET /invoices` history endpoint | ✅ |
+| `handler = Mangum(app)` in `main.py` | ✅ |
+| `summary_service.py` as separate step | ✅ |
+| OOP, PEP8, SOLID, clean architecture | ✅ |
+| Deployed serverlessly via SAM | ⏳ Not yet deployed |
+| GitHub Actions CI/CD pipeline | ❌ Missing |
+| Root-level `README.md` | ❌ Missing |

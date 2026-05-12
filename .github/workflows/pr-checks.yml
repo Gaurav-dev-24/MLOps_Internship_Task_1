@@ -1,0 +1,104 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches:
+      - main
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # Lint backend Python code
+  # ---------------------------------------------------------------------------
+  lint-backend:
+    name: Lint Backend (Python)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install linting tools
+        run: pip install flake8 bandit
+
+      - name: Run flake8 (PEP8 check)
+        run: |
+          flake8 backend/api_lambda/ backend/processing_lambda/ \
+            --max-line-length=120 \
+            --exclude=__pycache__,.aws-sam \
+            --statistics
+
+      - name: Run bandit (security scan)
+        run: |
+          bandit -r backend/api_lambda/ backend/processing_lambda/ \
+            -ll -q \
+            --exclude .aws-sam
+
+  # ---------------------------------------------------------------------------
+  # Validate SAM template
+  # ---------------------------------------------------------------------------
+  validate-sam:
+    name: Validate SAM Template
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (read-only validation role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+
+      - name: Install SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Validate template.yaml
+        working-directory: backend
+        run: sam validate --region ap-south-1
+
+  # ---------------------------------------------------------------------------
+  # Lint and build frontend
+  # ---------------------------------------------------------------------------
+  lint-frontend:
+    name: Lint & Build Frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run ESLint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Build (verify no compile errors)
+        working-directory: frontend
+        env:
+          VITE_API_BASE_URL: https://placeholder.execute-api.ap-south-1.amazonaws.com/dev
+        run: npm run build

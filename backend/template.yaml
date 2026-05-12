@@ -17,7 +17,6 @@ Globals:
     Timeout: 30
     Environment:
       Variables:
-        AWS_REGION: !Ref AWS::Region
         DYNAMODB_TABLE_NAME: !Ref InvoicesTable
         S3_BUCKET_NAME: !Ref InvoiceBucket
     Layers:

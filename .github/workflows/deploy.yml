@@ -1,0 +1,246 @@
+name: Deploy AI Invoice Analysis System
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:        # Allow manual trigger from GitHub UI
+
+# Prevent concurrent deployments to the same environment
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-south-1
+  SAM_STACK_NAME: ai-invoice-app-dev
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # JOB 1 — Lint & validate backend code
+  # ---------------------------------------------------------------------------
+  lint-backend:
+    name: Lint Backend (Python)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install linting tools
+        run: pip install flake8 pylint bandit
+
+      - name: Run flake8 (PEP8 style check)
+        run: |
+          flake8 backend/api_lambda/ backend/processing_lambda/ \
+            --max-line-length=120 \
+            --exclude=__pycache__,.aws-sam \
+            --statistics
+
+      - name: Run bandit (security scan)
+        run: |
+          bandit -r backend/api_lambda/ backend/processing_lambda/ \
+            -ll \
+            --exclude .aws-sam \
+            -q
+
+  # ---------------------------------------------------------------------------
+  # JOB 2 — Lint & build frontend
+  # ---------------------------------------------------------------------------
+  build-frontend:
+    name: Build Frontend (React + Vite)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run ESLint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Build frontend for production
+        working-directory: frontend
+        env:
+          # Inject the API Gateway URL at build time.
+          # After first deploy, set VITE_API_BASE_URL in GitHub Secrets.
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+        run: npm run build
+
+      - name: Upload frontend build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # JOB 3 — Deploy backend via AWS SAM
+  # ---------------------------------------------------------------------------
+  deploy-backend:
+    name: Deploy Backend (AWS SAM)
+    runs-on: ubuntu-latest
+    needs: [lint-backend]        # Only deploy if lint passes
+    environment: production      # Requires environment approval (optional)
+
+    outputs:
+      api_endpoint: ${{ steps.sam-outputs.outputs.api_endpoint }}
+      bucket_name: ${{ steps.sam-outputs.outputs.bucket_name }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Validate SAM template
+        working-directory: backend
+        run: sam validate --region ${{ env.AWS_REGION }}
+
+      - name: Build SAM application
+        working-directory: backend
+        run: |
+          sam build \
+            --use-container \
+            --parallel \
+            --cached
+
+      - name: Deploy SAM application
+        working-directory: backend
+        run: |
+          sam deploy \
+            --stack-name ${{ env.SAM_STACK_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              "Environment=dev \
+               PresignedUrlExpiry=300 \
+               MaxFileSizeBytes=10485760" \
+            --resolve-s3 \
+            --s3-prefix ${{ env.SAM_STACK_NAME }}
+
+      - name: Extract SAM stack outputs
+        id: sam-outputs
+        run: |
+          API_ENDPOINT=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.SAM_STACK_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" \
+            --output text)
+
+          BUCKET_NAME=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.SAM_STACK_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --query "Stacks[0].Outputs[?OutputKey=='InvoiceBucketName'].OutputValue" \
+            --output text)
+
+          echo "api_endpoint=$API_ENDPOINT" >> $GITHUB_OUTPUT
+          echo "bucket_name=$BUCKET_NAME"   >> $GITHUB_OUTPUT
+          echo "::notice::API Endpoint: $API_ENDPOINT"
+          echo "::notice::S3 Bucket: $BUCKET_NAME"
+
+  # ---------------------------------------------------------------------------
+  # JOB 4 — Deploy frontend to S3 + CloudFront invalidation
+  # ---------------------------------------------------------------------------
+  deploy-frontend:
+    name: Deploy Frontend (S3)
+    runs-on: ubuntu-latest
+    needs: [build-frontend, deploy-backend]
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download frontend build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend-dist/
+
+      - name: Sync frontend to S3
+        env:
+          FRONTEND_BUCKET: ${{ secrets.FRONTEND_S3_BUCKET }}
+        run: |
+          aws s3 sync frontend-dist/ s3://${{ env.FRONTEND_BUCKET }}/ \
+            --delete \
+            --cache-control "max-age=31536000,public,immutable" \
+            --exclude "index.html"
+
+          # index.html must not be cached so users always get the latest
+          aws s3 cp frontend-dist/index.html \
+            s3://${{ env.FRONTEND_BUCKET }}/index.html \
+            --cache-control "no-cache,no-store,must-revalidate" \
+            --content-type "text/html"
+
+      - name: Invalidate CloudFront cache (if configured)
+        env:
+          CF_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
+        if: env.CF_DISTRIBUTION_ID != ''
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ env.CF_DISTRIBUTION_ID }} \
+            --paths "/*"
+
+  # ---------------------------------------------------------------------------
+  # JOB 5 — Post-deploy summary
+  # ---------------------------------------------------------------------------
+  deployment-summary:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [deploy-backend, deploy-frontend]
+    if: always()
+
+    steps:
+      - name: Print deployment summary
+        run: |
+          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Stack | ${{ env.SAM_STACK_NAME }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Region | ${{ env.AWS_REGION }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| API Endpoint | ${{ needs.deploy-backend.outputs.api_endpoint }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Triggered by | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
