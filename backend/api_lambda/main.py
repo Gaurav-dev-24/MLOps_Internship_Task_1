@@ -43,7 +43,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],          # Tighten to frontend domain in production
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
     allow_headers=["*"],
 )
 
