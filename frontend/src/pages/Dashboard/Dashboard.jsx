@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invoiceService } from '../../services';
 import { InvoiceTable } from '../../components/invoice';
-
+import ErrorState from "../../components/common/ErrorState";
 import { formatCurrency } from '../../utils';
 
 const statCards = [

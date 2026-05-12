@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { InvoiceTable } from '../../components/invoice';
 import { useInvoices } from '../../hooks';
 import { INVOICE_STATUS, cn } from '../../utils';
+import ErrorState from "../../components/common/ErrorState";
 
 const statusOptions = [
   { value: '', label: 'All Statuses' },
