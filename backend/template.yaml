@@ -308,7 +308,6 @@ Resources:
       Role: !GetAtt ProcessingLambdaRole.Arn
       Timeout: 120
       MemorySize: 1024
-      ReservedConcurrentExecutions: 10
       Events:
         SQSTrigger:
           Type: SQS

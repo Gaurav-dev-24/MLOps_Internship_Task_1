@@ -14,10 +14,10 @@ No boto3 imports here — AWS calls are encapsulated in the layers below.
 import logging
 from typing import Any
 
-from api_lambda.models.invoice import Invoice
-from api_lambda.repositories.invoice_repository import InvoiceRepository
-from api_lambda.services.s3_service import S3Service
-from api_lambda.utils.logger import get_logger
+from models.invoice import Invoice
+from repositories.invoice_repository import InvoiceRepository
+from services.s3_service import S3Service
+from utils.logger import get_logger
 
 logger: logging.Logger = get_logger(__name__)
 

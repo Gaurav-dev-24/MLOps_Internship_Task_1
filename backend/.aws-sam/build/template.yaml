@@ -10,8 +10,6 @@ Globals:
     Timeout: 30
     Environment:
       Variables:
-        AWS_REGION:
-          Ref: AWS::Region
         DYNAMODB_TABLE_NAME:
           Ref: InvoicesTable
         S3_BUCKET_NAME:
@@ -293,7 +291,6 @@ Resources:
         - Arn
       Timeout: 120
       MemorySize: 1024
-      ReservedConcurrentExecutions: 10
       Events:
         SQSTrigger:
           Type: SQS

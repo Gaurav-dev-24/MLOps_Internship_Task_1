@@ -18,7 +18,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from api_lambda.config.settings import settings
+from config.settings import settings
 
 
 class UploadRequest(BaseModel):

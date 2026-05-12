@@ -17,9 +17,9 @@ import os
 import boto3
 from botocore.exceptions import ClientError
 
-from api_lambda.config.settings import settings
-from api_lambda.exceptions.custom_exceptions import S3UploadException
-from api_lambda.utils.logger import get_logger
+from config.settings import settings
+from exceptions.custom_exceptions import S3UploadException
+from utils.logger import get_logger
 
 logger: logging.Logger = get_logger(__name__)
 

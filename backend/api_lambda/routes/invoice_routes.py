@@ -19,15 +19,15 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
 
-from api_lambda.exceptions.custom_exceptions import (
+from exceptions.custom_exceptions import (
     DynamoDBException,
     InvoiceNotFoundException,
     S3UploadException,
 )
-from api_lambda.schemas.invoice_schema import UploadRequest
-from api_lambda.services.invoice_service import InvoiceService
-from api_lambda.utils.logger import get_logger
-from api_lambda.utils.response_formatter import error_response, success_response
+from schemas.invoice_schema import UploadRequest
+from services.invoice_service import InvoiceService
+from utils.logger import get_logger
+from utils.response_formatter import error_response, success_response
 
 logger: logging.Logger = get_logger(__name__)
 

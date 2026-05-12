@@ -15,8 +15,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
 
-from api_lambda.routes.invoice_routes import router as invoice_router
-from api_lambda.utils.logger import get_logger
+from routes.invoice_routes import router as invoice_router
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
