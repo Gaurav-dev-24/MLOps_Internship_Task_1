@@ -1,6 +1,5 @@
-import { createContext, useState, useCallback } from 'react';
-
-export const AppContext = createContext(null);
+import { useState, useCallback } from 'react';
+import { AppContext } from './context';
 
 /**
  * Global application context provider.
@@ -20,7 +19,6 @@ export function AppProvider({ children }) {
 
   const notify = useCallback((message, type = 'info') => {
     setNotification({ message, type });
-
     setTimeout(() => {
       setNotification(null);
     }, 4000);
