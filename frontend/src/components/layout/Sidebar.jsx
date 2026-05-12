@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { cn } from '../../utils';
-import { useApp } from '../../context';
+import { useApp } from '../../context/useApp';
 
 const navItems = [
   {

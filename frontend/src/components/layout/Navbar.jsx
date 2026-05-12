@@ -1,4 +1,4 @@
-import { useApp } from '../../context';
+import { useApp } from '../../context/useApp';
 
 /**
  * Top navigation bar with mobile hamburger toggle.
@@ -26,13 +26,12 @@ export default function Navbar() {
       {/* Notification toast */}
       {notification && (
         <div
-          className={`animate-slide-up rounded-lg px-4 py-2 text-sm font-medium ${
-            notification.type === 'error'
+          className={`animate-slide-up rounded-lg px-4 py-2 text-sm font-medium ${notification.type === 'error'
               ? 'bg-red-500/10 text-red-400 ring-1 ring-red-500/20'
               : notification.type === 'success'
                 ? 'bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20'
                 : 'bg-brand-500/10 text-brand-400 ring-1 ring-brand-500/20'
-          }`}
+            }`}
         >
           {notification.message}
         </div>
