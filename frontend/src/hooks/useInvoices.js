@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoiceService } from '../services';
 
 /**
@@ -48,9 +48,15 @@ export default function useInvoices(initialParams = {}) {
     }
   }, [params]);
 
+  // ✅ Fix: useRef se track karo, direct call nahi
+  const fetchRef = useRef(fetchInvoices);
   useEffect(() => {
-    fetchInvoices();
+    fetchRef.current = fetchInvoices;
   }, [fetchInvoices]);
+
+  useEffect(() => {
+    fetchRef.current();
+  }, [params]);  // ← fetchInvoices nahi, params pe depend karo
 
   const updateParams = useCallback((newParams) => {
     setParams((prev) => ({ ...prev, ...newParams, page: newParams.page || 1 }));
