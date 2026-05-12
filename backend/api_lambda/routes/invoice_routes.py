@@ -47,18 +47,6 @@ _invoice_service = InvoiceService()
     status_code=status.HTTP_200_OK,
 )
 def generate_upload_url(request: UploadRequest) -> dict[str, Any]:
-    """
-    Validate file metadata and return a presigned S3 PUT URL.
-
-    The client uses the returned ``upload_url`` to PUT the file binary
-    directly to S3 — the binary never passes through this Lambda.
-
-    Args:
-        request: Validated UploadRequest with file_name and file_size.
-
-    Returns:
-        Success envelope containing upload_url and file_key.
-    """
     logger.info(
         "POST /generate-upload-url called. file_name=%s file_size=%d",
         request.file_name,
@@ -68,9 +56,7 @@ def generate_upload_url(request: UploadRequest) -> dict[str, Any]:
         data: dict[str, str] = _invoice_service.create_upload_url(
             file_name=request.file_name
         )
-        logger.info(
-            "Upload URL generated. file_key=%s", data.get("file_key")
-        )
+        logger.info("Upload URL generated. file_key=%s", data.get("file_key"))
         return success_response(
             message="Upload URL generated successfully.", data=data
         )
@@ -86,9 +72,63 @@ def generate_upload_url(request: UploadRequest) -> dict[str, Any]:
         )
 
     except Exception as exc:  # noqa: BLE001
-        logger.error(
-            "Unexpected error in generate_upload_url. error=%s", str(exc)
+        logger.error("Unexpected error in generate_upload_url. error=%s", str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=error_response(
+                message="An unexpected error occurred.",
+                error=str(exc),
+            ),
         )
+
+
+# ---------------------------------------------------------------------------
+# GET /invoices/stats  ← NEW
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/invoices/stats",
+    summary="Get invoice statistics",
+    response_description="Aggregated invoice stats",
+    status_code=status.HTTP_200_OK,
+)
+def get_invoice_stats() -> dict[str, Any]:
+    """
+    Return aggregated statistics over all invoice records.
+
+    Returns:
+        Success envelope containing total, processed, failed,
+        pending counts and totalAmount.
+    """
+    logger.info("GET /invoices/stats called.")
+    try:
+        data: dict[str, Any] = _invoice_service.get_all_invoices()
+        invoices = data.get("invoices", [])
+
+        stats = {
+            "total": len(invoices),
+            "processed": len([i for i in invoices if i.get("status") == "processed"]),
+            "failed": len([i for i in invoices if i.get("status") == "failed"]),
+            "pending": len([i for i in invoices if i.get("status") == "pending"]),
+            "totalAmount": sum(
+                float(i.get("total_amount", 0)) for i in invoices
+            ),
+        }
+        return success_response(message="Stats fetched successfully.", data=stats)
+
+    except DynamoDBException as exc:
+        logger.error("DynamoDBException in get_invoice_stats. error=%s", str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=error_response(
+                message="Failed to fetch invoice stats.",
+                error=str(exc),
+            ),
+        )
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Unexpected error in get_invoice_stats. error=%s", str(exc))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=error_response(
@@ -110,15 +150,6 @@ def generate_upload_url(request: UploadRequest) -> dict[str, Any]:
     status_code=status.HTTP_200_OK,
 )
 def get_invoice(invoice_id: str) -> dict[str, Any]:
-    """
-    Retrieve a fully-processed invoice record from DynamoDB.
-
-    Args:
-        invoice_id: The DynamoDB partition key for the invoice.
-
-    Returns:
-        Success envelope containing the serialised invoice record.
-    """
     logger.info("GET /invoice/%s called.", invoice_id)
     try:
         data: dict[str, Any] = _invoice_service.get_invoice(invoice_id)
@@ -176,12 +207,6 @@ def get_invoice(invoice_id: str) -> dict[str, Any]:
     status_code=status.HTTP_200_OK,
 )
 def get_all_invoices() -> dict[str, Any]:
-    """
-    Retrieve every invoice record from DynamoDB.
-
-    Returns:
-        Success envelope containing a list of all serialised invoice records.
-    """
     logger.info("GET /invoices called.")
     try:
         data: dict[str, Any] = _invoice_service.get_all_invoices()
