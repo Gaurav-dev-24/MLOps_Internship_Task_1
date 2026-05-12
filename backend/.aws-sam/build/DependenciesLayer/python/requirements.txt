@@ -1,0 +1,6 @@
+fastapi
+mangum
+pydantic
+pydantic-settings
+boto3
+botocore
